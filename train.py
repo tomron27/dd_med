@@ -5,11 +5,8 @@ import torch
 from tqdm import tqdm
 from datetime import datetime
 import pickle
-
-from torch.optim.lr_scheduler import ReduceLROnPlateau, MultiStepLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
-
-import config
 from config import TrainConfig
 from dataio.dataloader import probe_data_folder, BraTS18Binary
 from train_utils import log_stats_classification, compute_stats_classification
@@ -119,8 +116,7 @@ def train():
                         current_lr = optimizer.param_groups[0]['lr'] if scheduler is not None else params["lr"]
                         log_stats_classification(val_stats, outputs, targets, losses, batch_size=params["batch_size"],
                                              lr=current_lr)
-                val_loss, val_score = compute_stats_classification(train_stats, val_stats, epoch,
-                                                                 ret_metric=params["save_metric"])
+                val_loss, val_score = compute_stats_classification(val_stats, ret_metric=params["save_metric"])
 
         # progress LR scheduler
         if scheduler is not None:
