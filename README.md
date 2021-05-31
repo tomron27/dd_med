@@ -1,0 +1,1 @@
+### Repository for NeurIPS2021 submission: "Dual Decomposition of Convex Optimization Layer for Consistent Attention in Medical Images"
