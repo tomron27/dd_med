@@ -5,12 +5,6 @@ import random
 from tqdm import tqdm
 import torch
 from torch.utils.data import Dataset
-from config import BASE_DIR
-
-from torchvision.transforms import Compose, Resize
-from torchvision.transforms import InterpolationMode
-from kornia.augmentation import RandomAffine, RandomVerticalFlip, RandomHorizontalFlip
-
 
 def get_patient_files(base_dir, patient, bad_files=None):
     files = os.listdir(os.path.join(base_dir, patient))
