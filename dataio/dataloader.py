@@ -69,9 +69,10 @@ class BraTS18(Dataset):
         try:
             image = np.load(os.path.join(self.base_folder, image_fname))['data']
             image = torch.tensor(image, dtype=torch.float32)
-        except:
+        except Exception as e:
             print(f"Error encountered on '{image_fname}'; '{mask_fname}'")
-            raise ValueError
+            print(e)
+            raise e
         label = int(re.search(r"y=([0-9]+)", image_fname).groups(1)[0])
         label = torch.tensor(label, dtype=torch.float32)
 

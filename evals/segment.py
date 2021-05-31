@@ -1,8 +1,9 @@
 import sys
 import os
 sys.path.append(os.path.dirname(os.getcwd()))
-import os
+import re
 import numpy as np
+import pandas as pd
 import torch
 from tqdm import tqdm
 import pickle
@@ -11,8 +12,7 @@ from torch.utils.data import DataLoader
 from torchvision.transforms import Compose, Resize
 from torchvision.transforms import InterpolationMode
 from kornia.augmentation import Normalize
-
-from config import TrainConfig
+from config import TrainConfig, PROJECT_DIR
 from dataio.dataloader import probe_data_folder, BraTS18Binary
 from models.unet import get_unet_encoder_classifier
 from models.attention import SumPool
@@ -93,7 +93,7 @@ def save_images_and_masks():
         pickle.dump(res, f)
 
 
-def get_deeplift_attr(model, level=4, downsample=True, normalize=True):
+def get_deeplift_attr(model, block=4, downsample=True, normalize=True):
     attrs = []
     from captum.attr import DeepLift
     attributer = DeepLift(model, multiply_by_inputs=False)
@@ -107,13 +107,13 @@ def get_deeplift_attr(model, level=4, downsample=True, normalize=True):
             attr = attr.sum(dim=1)
             attr = torch.softmax(attr.view(1, -1), dim=1).reshape(attr.shape)
         if downsample:
-            if level == 4:
+            if block == 4:
                 attr = SumPool(8)(attr)
-            elif level == 3:
+            elif block == 3:
                 attr = SumPool(4)(attr)
-            elif level == 2:
+            elif block == 2:
                 attr = SumPool(2)(attr)
-            elif level == 1:
+            elif block == 1:
                 pass
             else:
                 raise NotImplementedError
@@ -121,16 +121,16 @@ def get_deeplift_attr(model, level=4, downsample=True, normalize=True):
     return attrs
 
 
-def get_gradcam_attr(model, level=4, normalize=True):
+def get_gradcam_attr(model, block=4, normalize=True):
     attrs = []
     from captum.attr import LayerGradCam
-    if level == 4:
+    if block == 4:
         layer = model.encoder4
-    elif level == 3:
+    elif block == 3:
         layer = model.encoder3
-    elif level == 2:
+    elif block == 2:
         layer = model.encoder2
-    elif level == 1:
+    elif block == 1:
         layer = model.encoder1
     else:
         raise NotImplementedError
@@ -148,7 +148,7 @@ def get_gradcam_attr(model, level=4, normalize=True):
     return attrs
 
 
-def get_lrp_attr(model, level=4, normalize=True, downsample=True):
+def get_lrp_attr(model, block=4, normalize=True, downsample=True):
     attrs = []
     from captum.attr import LRP
     attributer = LRP(model)
@@ -162,13 +162,13 @@ def get_lrp_attr(model, level=4, normalize=True, downsample=True):
             attr = attr.sum(dim=1)
             attr = torch.softmax(attr.view(1, -1), dim=1).reshape(attr.shape)
         if downsample:
-            if level == 4:
+            if block == 4:
                 attr = SumPool(8)(attr)
-            elif level == 3:
+            elif block == 3:
                 attr = SumPool(4)(attr)
-            elif level == 2:
+            elif block == 2:
                 attr = SumPool(2)(attr)
-            elif level == 1:
+            elif block == 1:
                 pass
             else:
                 raise NotImplementedError
@@ -176,7 +176,7 @@ def get_lrp_attr(model, level=4, normalize=True, downsample=True):
     return attrs
 
 
-def get_inxgrad_attr(model, level=4, normalize=True, downsample=True):
+def get_inxgrad_attr(model, block=4, normalize=True, downsample=True):
     attrs = []
     from captum.attr import InputXGradient
     attributer = InputXGradient(model)
@@ -190,13 +190,13 @@ def get_inxgrad_attr(model, level=4, normalize=True, downsample=True):
             attr = attr.sum(dim=1)
             attr = torch.softmax(attr.view(1, -1), dim=1).reshape(attr.shape)
         if downsample:
-            if level == 4:
+            if block == 4:
                 attr = SumPool(8)(attr)
-            elif level == 3:
+            elif block == 3:
                 attr = SumPool(4)(attr)
-            elif level == 2:
+            elif block == 2:
                 attr = SumPool(2)(attr)
-            elif level == 1:
+            elif block == 1:
                 pass
             else:
                 raise NotImplementedError
@@ -204,11 +204,9 @@ def get_inxgrad_attr(model, level=4, normalize=True, downsample=True):
     return attrs
 
 
-def get_dual_attr(model_path, level=4, config_file="params.p"):
+def get_dual_attr(model_path, block=4):
     base_dir, model_file = os.path.split(model_path)
-
-    config_handler = open(os.path.join(base_dir, config_file), 'rb')
-    params = pickle.load(config_handler)
+    params = TrainConfig().config
     params["learnable_attn"] = True
     params["learnable_duals"] = True
     params["attn_kl"] = True
@@ -222,31 +220,8 @@ def get_dual_attr(model_path, level=4, config_file="params.p"):
         image, (target, mask) = sample
         image = image.to(device)
         outputs, attn, duals = model(image)
-        attns.append(attn[level - 3].detach().cpu())
+        attns.append(attn[block - 3].detach().cpu())
     return attns
-
-
-def get_baseline_attr(model_path, level=4, config_file="params.p"):
-    base_dir, model_file = os.path.split(model_path)
-
-    config_handler = open(os.path.join(base_dir, config_file), 'rb')
-    params = pickle.load(config_handler)
-    params["learnable_attn"] = True
-    params["learnable_duals"] = False
-    params["attn_kl"] = False
-    params["weights"] = model_path = os.path.join(base_dir, model_file)
-    model = get_unet_encoder_classifier(**params)
-    model = model.to(device)
-    model.eval()
-
-    attns = []
-    for j, sample in tqdm(enumerate(val_loader), total=len(val_loader)):
-        image, (target, mask) = sample
-        image = image.to(device)
-        outputs, attn, _ = model(image)
-        attns.append(attn[level - 3].detach().cpu())
-    return attns
-
 
 def get_ap(mask, heatmap):
     mask = mask[0]
@@ -258,7 +233,7 @@ def get_ap(mask, heatmap):
     return average_precision_score(mask.ravel(), heatmap.ravel())
 
 
-def get_q_iou(mask, heatmap, q=0.025):
+def get_q_iou(mask, heatmap, q=0.975):
     if heatmap.shape != mask.shape:
         heatmap = resize_filter(torch.tensor(heatmap).unsqueeze(0)).squeeze(0) / (
                     (heatmap.shape[0] / mask.shape[0]) ** 2)
@@ -279,127 +254,103 @@ def get_ap_stats(attrs):
     return sum(ap_list) / len(ap_list)
 
 
-def get_q_iou_stats(attrs, q=0.025):
+def get_q_iou_stats(attrs, q=0.95):
     qiou_list = []
     for j, sample in tqdm(enumerate(val_loader), total=len(val_loader)):
         image, (_, mask) = sample
-        qiou = get_q_iou(mask, attrs[j], q=q)
+        qiou = get_q_iou(mask, attrs[j], q=1-q)
         qiou_list.append(qiou)
     return sum(qiou_list) / len(qiou_list)
 
 
 if __name__ == "__main__":
 
-    baseline_model_path = "/hdd0/projects/regex/models/unet_encoder_baseline_score=0.9717.pt"
-    dual_model_path = ""
+    baseline_model_path = os.path.join(PROJECT_DIR, "models/unet_encoder_baseline_score=0.9717.pt")
+    dual_model_path = os.path.join(PROJECT_DIR, "models/unet_encoder_dual_decomp_score=0.9736.pt")
 
     calc_attrs = True
-    calc_stats = True
-    levels = [3, 4]
+    calc_overlap = True
+    blocks = [3]
     resize_filter = Resize((256, 256), interpolation=InterpolationMode.NEAREST)
 
     # Base model and dataset
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     val_dataset, val_loader = get_dataset()
     base_model = get_base_model(baseline_model_path)
-
+    
+    os.makedirs("attrs", exist_ok=True)
+    os.makedirs("results", exist_ok=True)
     print("*** Baseline methods ***")
-    for level in levels:
-        print(f"*** Level {level} ***")
+    for block in blocks:
+        print(f"*** Block {block} ***")
+        # Get attribution maps
         if calc_attrs:
-            if not os.path.exists(f'attrs/gc_attrs_level={level}.pkl'):
-                print(f"Calculating attributions: GracCAM level={level}")
-                gc_attrs = get_gradcam_attr(base_model, level=level)
-                with open(f'attrs/gc_attrs_level={level}.pkl', 'wb') as f:
+            if not os.path.exists(f'attrs/gc_attrs_block={block}.pkl'):
+                print(f"Calculating attributions: GracCAM block={block}")
+                gc_attrs = get_gradcam_attr(base_model, block=block)
+                with open(f'attrs/gc_attrs_block={block}.pkl', 'wb') as f:
                     pickle.dump(gc_attrs, f)
-            if not os.path.exists(f'attrs/inxgrad_attrs_level={level}.pkl'):
-                print(f"Calculating attributions: Gradient*Input level={level}")
-                inxgrad_attrs = get_inxgrad_attr(base_model, level=level)
-                with open(f'attrs/inxgrad_attrs_level={level}.pkl', 'wb') as f:
-                    pickle.dump(inxgrad_attrs, f)
-            if not os.path.exists(f'attrs/dl_attrs_level={level}.pkl'):
-                print(f"Calculating attributions: DeepLIFT level={level}")
-                dl_attrs = get_deeplift_attr(base_model, level=level)
-                with open(f'attrs/dl_attrs_level={level}.pkl', 'wb') as f:
+            if not os.path.exists(f'attrs/dl_attrs_block={block}.pkl'):
+                print(f"Calculating attributions: DeepLIFT block={block}")
+                dl_attrs = get_deeplift_attr(base_model, block=block)
+                with open(f'attrs/dl_attrs_block={block}.pkl', 'wb') as f:
                     pickle.dump(dl_attrs, f)
-            if not os.path.exists(f'attrs/lrp_attrs_level={level}.pkl'):
-                print(f"Calculating attributions: LRP level={level}")
-                lrp_attrs = get_lrp_attr(base_model, level=level)
-                with open(f'attrs/lrp_attrs_level={level}.pkl', 'wb') as f:
+            if not os.path.exists(f'attrs/lrp_attrs_block={block}.pkl'):
+                print(f"Calculating attributions: LRP block={block}")
+                lrp_attrs = get_lrp_attr(base_model, block=block)
+                with open(f'attrs/lrp_attrs_block={block}.pkl', 'wb') as f:
                     pickle.dump(lrp_attrs, f)
-
-        if calc_stats:
-            with open(f'attrs/gc_attrs_level={level}.pkl', 'rb') as f:
-                gc_attrs = pickle.load(f)
-            with open(f'attrs/inxgrad_attrs_level={level}.pkl', 'rb') as f:
-                inxgrad_attrs = pickle.load(f)
-            with open(f'attrs/dl_attrs_level={level}.pkl', 'rb') as f:
-                dl_attrs = pickle.load(f)
-            with open(f'attrs/lrp_attrs_level={level}.pkl', 'rb') as f:
-                lrp_attrs = pickle.load(f)
-
-            base_methods = {
-                "GradCAM": gc_attrs,
-                "InputXGradients": inxgrad_attrs,
-                "DeepLIFT": dl_attrs,
-                "LRP": lrp_attrs,
-            }
-
-            for name, attrs in base_methods.items():
-                print(f"Processing results: , method={name}, level={level}")
-                if not os.path.exists(f'results/method={name}_level={level}__qiou_q=0.1.pkl'):
-                    stats = get_q_iou_stats(attrs, q=0.1)
-                    with open(f'results/method={name}_level={level}__qiou_q=0.1.pkl', 'wb') as f:
-                        pickle.dump(stats, f)
-                if not os.path.exists(f'results/method={name}_level={level}__qiou_q=0.05.pkl'):
-                    stats = get_q_iou_stats(attrs, q=0.05)
-                    with open(f'results/method={name}_level={level}__qiou_q=0.05.pkl', 'wb') as f:
-                        pickle.dump(stats, f)
-                if not os.path.exists(f'results/method={name}_level={level}__qiou_q=0.025.pkl'):
-                    stats = get_q_iou_stats(attrs, q=0.025)
-                    with open(f'results/method={name}_level={level}__qiou_q=0.025.pkl', 'wb') as f:
-                        pickle.dump(stats, f)
-                if not os.path.exists(f'results/method={name}_level={level}__map.pkl'):
-                    stats = get_ap_stats(attrs)
-                    with open(f'results/method={name}_level={level}__map.pkl', 'wb') as f:
-                        pickle.dump(stats, f)
-
-        if calc_attrs:
-            if not os.path.exists(f'attrs/baseline_attrs_level={level}.pkl'):
-                print(f"Calculating attributions: Baseline level={level}")
-                baseline_attrs = get_baseline_attr(baseline_model_path, level=level)
-                with open(f'attrs/baseline_attrs_level={level}.pkl', 'wb') as f:
-                    pickle.dump(baseline_attrs, f)
-            if not os.path.exists(f'attrs/dual_attrs_level={level}.pkl'):
-                print(f"Calculating attributions: Dual level={level}")
-                dual_attrs = get_dual_attr(dual_model_path, level=level)
-                with open(f'attrs/dual_attrs_level={level}.pkl', 'wb') as f:
+            if not os.path.exists(f'attrs/dual_attrs_block={block}.pkl'):
+                print(f"Calculating attributions: Dual block={block}")
+                dual_attrs = get_dual_attr(dual_model_path, block=block)
+                with open(f'attrs/dual_attrs_block={block}.pkl', 'wb') as f:
                     pickle.dump(dual_attrs, f)
 
-        if calc_stats:
-            with open(f'attrs/dual_attrs_level={level}.pkl', 'rb') as f:
+        # Calculate overlap
+        if calc_overlap:
+            with open(f'attrs/gc_attrs_block={block}.pkl', 'rb') as f:
+                gc_attrs = pickle.load(f)
+            with open(f'attrs/dl_attrs_block={block}.pkl', 'rb') as f:
+                dl_attrs = pickle.load(f)
+            with open(f'attrs/lrp_attrs_block={block}.pkl', 'rb') as f:
+                lrp_attrs = pickle.load(f)
+            with open(f'attrs/dual_attrs_block={block}.pkl', 'rb') as f:
                 dual_attrs = pickle.load(f)
 
-        ens_methods = {
-            "Dual": dual_attrs
-        }
+            methods = {
+                "GradCAM": gc_attrs,
+                "DeepLIFT": dl_attrs,
+                "LRP": lrp_attrs,
+                "Dual": dual_attrs,
+            }
 
-        for name, attrs in ens_methods.items():
-            print(f"Processing results: method={name}, level={level}")
-            if not os.path.exists(f'results/method={name}_level={level}__qiou_q=0.1.pkl'):
-                stats = get_q_iou_stats(attrs, q=0.1)
-                with open(f'results/method={name}_level={level}__qiou_q=0.1.pkl', 'wb') as f:
-                    pickle.dump(stats, f)
-            if not os.path.exists(f'results/method={name}_level={level}__qiou_q=0.05.pkl'):
-                stats = get_q_iou_stats(attrs, q=0.05)
-                with open(f'results/method={name}_level={level}__qiou_q=0.05.pkl', 'wb') as f:
-                    pickle.dump(stats, f)
-            if not os.path.exists(f'results/method={name}_level={level}__qiou_q=0.025.pkl'):
-                stats = get_q_iou_stats(attrs, q=0.025)
-                with open(f'results/method={name}_level={level}__qiou_q=0.025.pkl', 'wb') as f:
-                    pickle.dump(stats, f)
-            if not os.path.exists(f'results/method={name}_level={level}__map.pkl'):
-                stats = get_ap_stats(attrs)
-                with open(f'results/method={name}_level={level}__map.pkl', 'wb') as f:
-                    pickle.dump(stats, f)
-
+            for name, attrs in methods.items():
+                print(f"Calculating overlap for: , method={name}, block={block}")
+                if not os.path.exists(f'results/method={name}_block={block}__qiou_q=0.90.pkl'):
+                    stats = get_q_iou_stats(attrs, q=0.90)
+                    with open(f'results/method={name}_block={block}__qiou_q=0.90.pkl', 'wb') as f:
+                        pickle.dump(stats, f)
+                if not os.path.exists(f'results/method={name}_block={block}__qiou_q=0.95.pkl'):
+                    stats = get_q_iou_stats(attrs, q=0.95)
+                    with open(f'results/method={name}_block={block}__qiou_q=0.95.pkl', 'wb') as f:
+                        pickle.dump(stats, f)
+                if not os.path.exists(f'results/method={name}_block={block}__qiou_q=0.975.pkl'):
+                    stats = get_q_iou_stats(attrs, q=0.975)
+                    with open(f'results/method={name}_block={block}__qiou_q=0.975.pkl', 'wb') as f:
+                        pickle.dump(stats, f)
+                if not os.path.exists(f'results/method={name}_block={block}__map.pkl'):
+                    stats = get_ap_stats(attrs)
+                    with open(f'results/method={name}_block={block}__map.pkl', 'wb') as f:
+                        pickle.dump(stats, f)
+    # Print results
+    results = os.listdir("results")
+    result_index = ["method", "block", "metric", "value"]
+    result_df = pd.DataFrame(columns=result_index)
+    for result in results:
+        method, block, metric = re.search(r"method=([^\_]+)_block=([0-9]+)__(.+).pkl", result).groups()
+        with open(os.path.join("results", result), 'rb') as f:
+            value = pickle.load(f)
+            result_df = result_df.append({"method": method, "block": block, "metric": metric, "value": value},
+                                         ignore_index=True)
+    result_df = result_df.pivot(index=['block', 'metric'], columns=['method'], values=['value']) * 100
+    print(result_df)

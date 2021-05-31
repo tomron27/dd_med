@@ -72,7 +72,7 @@ def train():
     model = model.to(device)
 
     # Loss
-    criterion = DualDecompLoss(attn_kl=params["attn_kl"], kl_weight=params["kl_weight"], detach_targets=params["detach_targets"], )
+    criterion = DualDecompLoss(attn_kl=params["attn_kl"], alpha=params["alpha"], detach_targets=params["detach_targets"], )
 
     # Optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=params["lr"])
