@@ -6,6 +6,7 @@ from tqdm import tqdm
 import torch
 from torch.utils.data import Dataset
 
+
 def get_patient_files(base_dir, patient, bad_files=None):
     files = os.listdir(os.path.join(base_dir, patient))
     if bad_files is not None:
